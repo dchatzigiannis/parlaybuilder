@@ -170,6 +170,23 @@ body{
   padding:5px 9px;border-radius:5px;border:1px solid transparent;transition:all .12s;
 }
 .mast-link:hover{color:var(--ink);background:var(--surface);border-color:var(--paper-3)}
+/* Auto-refresh select — sits in the mast-meta bar, styled to match mast-link */
+.mast-refresh-select{
+  font-family:'Inter',sans-serif;font-size:12px;font-weight:500;
+  color:var(--ink-muted);background:transparent;
+  border:1px solid transparent;border-radius:5px;
+  padding:4px 6px;cursor:pointer;outline:none;
+  transition:all .12s;
+  /* Remove default select arrow on webkit; keep native on others */
+  -webkit-appearance:none;appearance:none;
+  padding-right:18px;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23666'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 5px center;
+}
+.mast-refresh-select:hover{color:var(--ink);background-color:var(--surface);border-color:var(--paper-3)}
+.mast-refresh-select option{background:var(--paper-2);color:var(--ink);}
+/* When auto-refresh is active (non-zero interval), tint the select green */
+.mast-refresh-select.active{color:var(--money);border-color:var(--money-dim,#2a4a2a);}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 
 /* ======================== CONTROL STRIP ======================== */
@@ -1746,6 +1763,13 @@ body{
     </div>
     <div class="credit-meter" id="creditMeter"></div>
     <a href="#" id="mastSetKey" class="mast-link">Set key</a>
+    <select id="autoRefreshSelect" class="mast-refresh-select" title="Auto-refresh interval">
+      <option value="0">Off</option>
+      <option value="30">30m</option>
+      <option value="60">1hr</option>
+      <option value="180">3hr</option>
+      <option value="360">6hr</option>
+    </select>
     <a href="#" id="mastRefresh" class="mast-link">Refresh</a>
   </div>
 </div>
@@ -2679,12 +2703,25 @@ const PROP_LABELS = {
   player_anytime_td:'Anytime TD', player_1st_td:'First TD', player_last_td:'Last TD',
   player_pass_rush_reception_yds:'Pass + Rush + Rec Yards',
   player_pass_rush_reception_tds:'Pass + Rush + Rec TDs',
-  // MLB
+  // MLB batter mains
   batter_hits:'Hits', batter_total_bases:'Total Bases', batter_home_runs:'Home Runs',
-  batter_rbis:'RBIs', batter_runs_scored:'Runs Scored', batter_strikeouts:'Strikeouts',
-  batter_walks:'Walks', batter_singles:'Singles', batter_doubles:'Doubles',
-  batter_triples:'Triples', batter_stolen_bases:'Stolen Bases',
+  batter_rbis:'RBIs', batter_runs_scored:'Runs', batter_strikeouts:'Strikeouts',
+  batter_walks:'Walks',
+  batter_singles:'To Hit a Single', batter_doubles:'To Hit a Double',
+  batter_triples:'To Hit a Triple', batter_stolen_bases:'Stolen Bases',
   batter_hits_runs_rbis:'Hits + Runs + RBIs',
+  // MLB alt ladders — same display name as parent so lines fold into the
+  // same market section rather than appearing as separate "Alt X" sections.
+  batter_home_runs_alternate:'Home Runs',
+  batter_rbis_alternate:'RBIs',
+  batter_runs_scored_alternate:'Runs',
+  batter_hits_alternate:'Hits',
+  batter_total_bases_alternate:'Total Bases',
+  batter_stolen_bases_alternate:'Stolen Bases',
+  batter_singles_alternate:'To Hit a Single',
+  batter_doubles_alternate:'To Hit a Double',
+  batter_triples_alternate:'To Hit a Triple',
+  // MLB pitcher
   pitcher_strikeouts:'Pitcher Strikeouts', pitcher_outs:'Pitcher Outs',
   pitcher_record_a_win:'Pitcher to Win', pitcher_hits_allowed:'Hits Allowed',
   pitcher_walks:'Pitcher Walks', pitcher_earned_runs:'Earned Runs',
@@ -2912,6 +2949,8 @@ const STATE = {
   pendingProps:{},          // fixtureId -> true while fetch is in flight
   tier2Fetched: new Set(),
   lazyLoadEnabled: true,
+  // Auto-refresh interval in minutes. 0 = Off. Persisted to localStorage.
+  autoRefreshMins: 0,
   playerIndex:[],           // [{name, fixtureId, fixtureLabel, startTime, propCount}] (current sport+date only)
   // Multi-slip workspace: STATE.slips holds all parlays the user is building;
   // Multi-slip workspace: STATE.slips is a FIXED 6-slot array. Slots are
@@ -3365,7 +3404,7 @@ const STAT_COMPONENTS = {
   },
   'MLB': {
     'Total Bases':                       ['Hits'],   // hits ≤ TB
-    'Hits + Runs + RBIs':                ['Hits', 'Runs Scored', 'RBIs'],
+    'Hits + Runs + RBIs':                ['Hits', 'Runs', 'RBIs'],
   },
   'NHL': {
     'Points':                            ['Goals', 'Assists'],   // NHL points = G + A
@@ -3889,7 +3928,7 @@ const CORRELATIONS_DEFAULTS = [
   // Walks + Hits same player (both volume markers)
   { sports:['MLB'], a:{kind:'prop',market:'Walks',side:'over'}, b:{kind:'prop',market:'Hits',side:'over'}, rel:'same-player', rho:0.15, note:'Plate-discipline + plate-appearance volume; mild positive.' },
   // Runs Scored + RBIs same player (lineup depth)
-  { sports:['MLB'], a:{kind:'prop',market:'Runs Scored',side:'over'}, b:{kind:'prop',market:'RBIs',side:'over'}, rel:'same-player', rho:0.20, note:'Lineup quality affects both — same-player runs and RBIs ride together.' },
+  { sports:['MLB'], a:{kind:'prop',market:'Runs',side:'over'}, b:{kind:'prop',market:'RBIs',side:'over'}, rel:'same-player', rho:0.20, note:'Lineup quality affects both — same-player runs and RBIs ride together.' },
 
   // ===== NHL additions =====
   // Same-team two scorers (shared game-script tailwind)
@@ -3961,9 +4000,9 @@ const CORRELATIONS_DEFAULTS = [
   { sports:['MLB'], a:{kind:'prop',market:'Pitcher Strikeouts',side:'over'}, b:{kind:'prop',market:'Total Bases',side:'under'}, rel:'opp-team', rho:0.30, note:'Ace striking out batters → fewer balls in play → fewer TB.' },
   // Pitcher Strikeouts + Pitcher Win (ML same-team): we have this; leave.
   // Singles + Hits same-player: hits include singles, mechanical.
-  { sports:['MLB'], a:{kind:'prop',market:'Singles',side:'over'}, b:{kind:'prop',market:'Hits',side:'over'}, rel:'same-player', rho:0.75, note:'Singles ⊂ hits; near-duplicate.' },
+  { sports:['MLB'], a:{kind:'prop',market:'To Hit a Single',side:'over'}, b:{kind:'prop',market:'Hits',side:'over'}, rel:'same-player', rho:0.75, note:'Singles ⊂ hits; near-duplicate.' },
   // Hits + Runs Scored same-player (gotta be on base to score).
-  { sports:['MLB'], a:{kind:'prop',market:'Hits',side:'over'}, b:{kind:'prop',market:'Runs Scored',side:'over'}, rel:'same-player', rho:0.30, note:'Hits put you on base → score depends on lineup behind.' },
+  { sports:['MLB'], a:{kind:'prop',market:'Hits',side:'over'}, b:{kind:'prop',market:'Runs',side:'over'}, rel:'same-player', rho:0.30, note:'Hits put you on base → score depends on lineup behind.' },
   // RBIs + Total Bases same-player (extra-base hits drive RBIs).
   // We have this at 0.40 — leave.
   // ML + Total OVER (same-game): winning team scoring more is loose pos.
@@ -4402,7 +4441,7 @@ const MARKET_TOKENS = {
   'Rush + Reception Yards':'R+R Yds', 'Rush + Reception TDs':'R+R TDs',
   // MLB
   'Hits':'H', 'Total Bases':'TB', 'Home Runs':'HR', 'RBIs':'RBI',
-  'Runs Scored':'R', 'Strikeouts':'K',
+  'Runs':'R', 'Strikeouts':'K',
   'Hits + Runs + RBIs':'H+R+RBI',
   'Pitcher Strikeouts':'K', 'Pitcher Outs':'Outs',
   'Pitcher to Win':'W',
@@ -4597,6 +4636,101 @@ async function refreshCatalog(){
   }
 }
 
+/* Re-fetch props for every fixture currently referenced by:
+ *   (a) any leg in the active slip across all 6 slip slots
+ *   (b) any saved/tracked parlay in the tracker
+ * Uses force:true to bypass the TTL cache so we actually get fresh prices.
+ * Tier-2 is re-fetched too (marks are cleared so mergeTier2IntoCache runs
+ * again). Silent — no status bar noise per fixture; one summary at the end.
+ */
+async function refreshTrackedFixtures(){
+  // Collect unique fixture IDs from active slips
+  const fxIds = new Set();
+  for (const slotSlip of STATE.slips){
+    for (const leg of (slotSlip.legs || [])){
+      if (leg.fixtureId) fxIds.add(leg.fixtureId);
+    }
+  }
+  // Collect fixture IDs from tracked parlays
+  try {
+    const saved = await loadSavedSlips();
+    for (const s of saved){
+      for (const leg of (s.legs || [])){
+        if (leg.fixtureId) fxIds.add(leg.fixtureId);
+      }
+    }
+  } catch(e){
+    console.warn('[autorefresh] could not load saved slips', e.message);
+  }
+
+  if (fxIds.size === 0) return;
+
+  setStatus(`Refreshing ${fxIds.size} fixture${fxIds.size>1?'s':''}…`, 'loading');
+  let done = 0;
+  for (const fxId of fxIds){
+    // Force-clear tier2 marker so tier2 re-fetches fresh data
+    STATE.tier2Fetched.delete(fxId);
+    try {
+      await fetchPropsForFixture(fxId, { force: true, silent: true });
+      await fetchPropsTier2(fxId);
+    } catch(e){
+      console.warn('[autorefresh] failed for', fxId, e.message);
+    }
+    done++;
+  }
+  setStatus('Data refreshed', 'ok',
+    `${done} fixture${done>1?'s':''} · ${STATE.credits.remaining != null ? STATE.credits.remaining + ' credits left' : ''}`);
+  // Re-render tracker if it's open so THEN→NOW columns update immediately
+  const hm = document.getElementById('historyModal');
+  if (hm && hm.classList.contains('show')) renderHistory();
+  render();
+}
+
+/* Set (or clear) the auto-refresh interval.
+ * mins=0 clears the timer (Off). Persists the choice to localStorage.
+ * Also updates the select element's visual active state.
+ */
+function setAutoRefresh(mins){
+  // Clear any running timer first
+  if (_autoRefreshTimer !== null){
+    clearInterval(_autoRefreshTimer);
+    _autoRefreshTimer = null;
+  }
+  STATE.autoRefreshMins = mins;
+  try { localStorage.setItem(AUTO_REFRESH_STORAGE_KEY, String(mins)); } catch(e){}
+
+  if (mins > 0){
+    const ms = mins * 60 * 1000;
+    _autoRefreshTimer = setInterval(() => {
+      console.log('[autorefresh] firing interval', mins, 'mins');
+      refreshCatalog().then(() => refreshTrackedFixtures());
+    }, ms);
+  }
+
+  // Sync the select element visual state
+  const sel = document.getElementById('autoRefreshSelect');
+  if (sel){
+    sel.value = String(mins);
+    sel.classList.toggle('active', mins > 0);
+  }
+}
+
+/* Restore auto-refresh setting from localStorage on boot */
+function restoreAutoRefresh(){
+  try {
+    const stored = localStorage.getItem(AUTO_REFRESH_STORAGE_KEY);
+    if (stored !== null){
+      const mins = parseInt(stored, 10);
+      if (!isNaN(mins) && AUTO_REFRESH_OPTIONS.some(o => o.mins === mins)){
+        setAutoRefresh(mins);
+        return;
+      }
+    }
+  } catch(e){}
+  // Default: Off
+  setAutoRefresh(0);
+}
+
 /* ============================================================
  *  LOAD SLATE  (game lines for the chosen sport+date)
  *
@@ -4730,6 +4864,21 @@ async function loadSlate(){
  *  page doesn't re-spend credits. Default TTL: 30 minutes.
  * ============================================================ */
 const PROPS_CACHE_TTL_MS = 30 * 60 * 1000;   // 30 minutes
+
+/* ============================================================
+ *  AUTO-REFRESH TIMER
+ *  Module-level handle so we can cancel/restart on interval change.
+ *  Interval options exposed in the status bar select.
+ * ============================================================ */
+const AUTO_REFRESH_OPTIONS = [
+  { label: 'Off',  mins: 0   },
+  { label: '30m',  mins: 30  },
+  { label: '1hr',  mins: 60  },
+  { label: '3hr',  mins: 180 },
+  { label: '6hr',  mins: 360 },
+];
+const AUTO_REFRESH_STORAGE_KEY = 'autoRefreshMins';
+let _autoRefreshTimer = null;
 function propsCacheKey(fixtureId){ return `props:${fixtureId}`; }
 
 async function loadPersistedProps(){
@@ -6116,9 +6265,10 @@ const MARKET_SORT_ORDER = [
   'Blocks',
   'Blocks + Steals',
   'Turnovers',
-  // MLB batter
-  'Hits','Total Bases','RBIs','Home Runs','Runs Scored',
-  'Hits + Runs + RBIs','Stolen Bases','Singles','Doubles',
+  // MLB batter — user-specified order
+  'Home Runs','Hits','Runs','RBIs','Hits + Runs + RBIs',
+  'Total Bases','Stolen Bases',
+  'To Hit a Single','To Hit a Double','To Hit a Triple',
   // MLB pitcher
   'Pitcher Strikeouts','Pitcher Outs','Earned Runs','Hits Allowed','Pitcher Walks',
 ];
@@ -11698,8 +11848,18 @@ function wireEvents(){
   // Manual catalog refresh
   document.getElementById('mastRefresh').addEventListener('click', e => {
     e.preventDefault();
-    refreshCatalog();
+    // Refresh button now does both: slate catalog + all tracked/slip fixtures
+    refreshCatalog().then(() => refreshTrackedFixtures());
   });
+
+  // Auto-refresh interval selector
+  const arSel = document.getElementById('autoRefreshSelect');
+  if (arSel){
+    arSel.addEventListener('change', () => {
+      const mins = parseInt(arSel.value, 10);
+      setAutoRefresh(isNaN(mins) ? 0 : mins);
+    });
+  }
 
   // API key modal
   document.getElementById('mastSetKey').addEventListener('click', e => {
@@ -12040,6 +12200,8 @@ async function boot(){
     return;
   }
   await loadSlate();
+  // Restore auto-refresh interval preference (default Off)
+  restoreAutoRefresh();
 }
 boot();
 </script>
