@@ -9724,12 +9724,18 @@ const NB_DISPERSION = {
   // These values are direct fits from 147 leave-one-out predictions across
   // 38 (player, market) groups. MAE for each in production: see calibration
   // analysis comments above.
-  'Points': 3.00,                  // NEW: was Gamma σ_mult=0.40. Tight match to FD/DK.
-  'Rebounds': 1.35,                // was 1.55 → 1.40 → 1.35 (small refinement)
-  'Assists': 1.20,                 // base value; see NB_DISPERSION_FN below for μ-dependent override
-  'Three-Pointers Made': 1.25,     // was 2.10
-  'Blocks': 1.20,                  // was 2.50 (low sample size — provisional)
-  'Steals': 1.20,                  // was 2.50 (no direct data; mirrors Blocks)
+  'Points': 6.80,                  // was 3.00 → 6.80 (Jun 2026 FD ladder calibration, N=15).
+                                   //   Old value over-dispersed: ~5pp alt error → ~3.3pp at 6.80.
+  'Rebounds': 12.10,               // was 1.35 → 12.10 (FD calibration, N=9). ~9.6pp → 1.9pp.
+  'Assists': 22.00,                // was μ-dependent 1.20-1.40 → constant 22.00 (FD calib, N=5,
+                                   //   MED confidence). ~10.4pp → 0.9pp. μ-dependent fn removed below.
+  'Three-Pointers Made': 1.25,     // unchanged — no clean 3PM ladders in Jun 2026 sample
+  'Blocks': 2.20,                  // was 1.20 (too tight — per audit, blocks are bursty;
+                                   // doc recommends k=3.0; φ=2.20 is conservative pending
+                                   // calibration data. 12 records, low confidence.)
+  'Steals': 1.90,                  // was 1.20 (same issue — doc recommends k=2.5 for steals;
+                                   // φ=1.90 is conservative pending calibration data.
+                                   // No direct data; slightly below Blocks given k=2.5 vs 3.0.)
 
   // ===== WNBA: inherits NBA values (same sport mechanics) =====
   // NB_DISPERSION lookup is by marketName only, not sport-scoped. WNBA
@@ -9749,32 +9755,36 @@ const NB_DISPERSION = {
   // might actually need φ closer to 1.10-1.20 (positive covariance between
   // components means PRA variance grows slower than mean — could even be
   // under-dispersed). Treat 1.30 as a safe provisional default.
-  'Rebounds + Assists': 1.30,      // was 1.60
-  'Points + Rebounds': 1.30,       // was 1.40
-  'Points + Assists': 1.30,        // was 1.45
-  'Points + Rebounds + Assists': 1.30,  // was 1.40
+  'Rebounds + Assists': 14.00,     // was 1.30 → 14.00 (NO direct fit in Jun 2026 sample;
+                                   //   interpolated by analogy between P+R 12.0 and P+A 16.3.
+                                   //   Provisional — collect R+A ladders to confirm.)
+  'Points + Rebounds': 12.00,      // was 1.30 → 12.00 (FD calibration, N=13). ~10.6pp → 2.0pp.
+  'Points + Assists': 16.30,       // was 1.30 → 16.30 (FD calibration, N=7). ~11.9pp → 1.5pp.
+  'Points + Rebounds + Assists': 19.40,  // was 1.30 → 19.40 (FD calib, N=10). ~12.6pp → 1.3pp.
 
-  // ===== MLB: NBA philosophy applied, MLB-unvalidated =====
-  // Two φ values were textbook-high (Home Runs 2.80, RBIs 1.60) and have
-  // been brought into the 1.2-1.4 range that NBA calibration revealed as
-  // the book-consensus norm for discrete counting stats. NBA showed
-  // textbook variance estimates over-disperse alt ladders by ~3pp MAE;
-  // assuming MLB follows the same pattern (likely but unproven), these
-  // refined values should reduce systematic over-pricing of MLB alts.
+  // ===== MLB: mixed sources, MLB-unvalidated =====
+  // Hits/Total Bases/Pitcher markets: kept in the 1.20-1.35 range consistent
+  // with NBA calibration showing books price discrete counting stats tightly.
+  // Home Runs: elevated at 2.20 (rare events, genuinely overdispersed).
+  // RBIs: corrected upward to 2.80 based on external audit showing 2+/1+
+  // ratio of 1.9-2.5× across 18 players — far too high for Poisson or low-φ
+  // NegBin. Bursty by nature (dependent on runners being on base).
   //
-  // CAVEAT: NO MLB calibration data exists. These values are based on
-  // applying the NBA calibration philosophy, not direct MLB fits. The
-  // values that were already in the 1.20-1.35 range (Pitcher Strikeouts,
-  // Pitcher Outs, Hits, Total Bases) are kept as-is — they fall within
-  // the validated range and changing them would be speculation.
+  // CAVEAT: NO MLB calibration data exists. All values are theory/audit-based.
   'Pitcher Strikeouts': 1.30,      // unchanged (already in validated range)
   'Pitcher Outs': 1.20,            // unchanged (already in validated range)
   'Hits': 1.20,                    // unchanged (already in validated range)
   'Total Bases': 1.35,             // unchanged (already in validated range)
-  'RBIs': 1.35,                    // was 1.60 — reduced toward NBA-validated range
-  'Home Runs': 2.20,               // was 2.80 — still elevated (HRs are rare events,
-                                   // higher variance/mean ratio is plausible), but
-                                   // 2.80 was textbook horse-racing-era estimate
+  'RBIs': 2.80,                    // VALIDATED (Jun 2026 FD milestone calib, N=144): fitted
+                                   // φ≈2.5, our 2.80 confirmed in range. Keep. (Earlier audit
+                                   // raised this from 1.35; real FD data now confirms it.)
+  'Home Runs': 3.00,               // was 2.20 → 3.00 (Jun 2026 FD calib, N=69 — fitted φ≈3.0).
+  'Runs': 1.80,                    // was 1.35 → 1.80 (Jun 2026 FD calib, N=144 — fitted φ≈1.8).
+  'Stolen Bases': 2.50,            // was 1.20 (default) → 2.50 (FD calib, N=48 — bursty rare event).
+  'Hits + Runs + RBIs': 2.50,      // was 1.30 (default) → 2.50 (FD calib, N=144 — ~1.6pp gain).
+  'Singles': 1.20,                 // unchanged — FD data consistent with Hits-like low dispersion
+  'Doubles': 1.20,                 // unchanged — rare event, insufficient ladder depth to refit
+  'Triples': 1.20,                 // unchanged — rare event
 
   // ===== NFL / NHL — UNCHANGED, locked from production =====
   // NFL and NHL tabs are hard-locked in the UI (see sport-tab handlers
@@ -9814,7 +9824,10 @@ const NB_DISPERSION = {
  * iterating 2-3 times: pick initial φ from h_anchor, solve μ, refine φ, etc.
  */
 const NB_DISPERSION_FN = {
-  'Assists': (mu) => 1.20 + 0.20 / (1 + Math.exp(-(mu - 5.0) / 1.0)),
+  // Assists μ-dependent override REMOVED (Jun 2026): FD ladder calibration showed
+  // a single constant φ=22.0 fit the Assists ladders better than the old
+  // 1.20-1.40 sigmoid (which was far too low — ~10pp alt-line error). Reintroduce
+  // a function here if future higher-N data shows clear μ-dependence.
 };
 
 /* Helper: return the dispersion φ for a market given the player's estimated
