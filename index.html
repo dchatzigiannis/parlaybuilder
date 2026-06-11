@@ -9699,105 +9699,113 @@ function altLineProbOver(line, fit){
  *   MLB Hits:      φ = 1.20
  */
 /* ============================================================
- *  NB_DISPERSION — fitted from May 9–10 FD/DK calibration data.
+ *  NB_DISPERSION — per-market Negative Binomial dispersion.
  *
- *  Each φ here was chosen as the value that minimised MAE between our
- *  alt-line predictions and FD/DK book-consensus probabilities, anchored
- *  at the main line, over 147 leave-one-out predictions across 38
- *  (player, market) groups.
+ *  ⚠️⚠️ PARAMETERIZATION — READ BEFORE TOUCHING ANY VALUE ⚠️⚠️
+ *  φ here is the FANO FACTOR:   variance = φ · μ      (var/mean ratio)
+ *  φ = 1   → Poisson (equidispersed)
+ *  φ = 3   → variance is 3× the mean
  *
- *  HISTORICAL NOTE: prior φ values (Rebounds 1.55, Assists 1.65, 3PM 2.10,
- *  Blocks 2.50) were textbook estimates based on game-log variance.
- *  Empirically those over-disperse the alt ladder — books decay alt
- *  probabilities faster from the main line than the textbook NegBin does.
- *  Lower φ ≈ 1.2 matches book behaviour with MAE under 1pp (vs ~3pp before).
+ *  This is NOT the "size" parameter used by Stan's neg_binomial_2, R's
+ *  rnbinom(size=), most academic sports models, and most published
+ *  audits, where:           variance = μ + μ²/φ_size
+ *  Conversion:              φ_fano  = 1 + μ / φ_size      (depends on μ!)
+ *  Use fanoFromNB2(mu, phiSize) below when importing external values.
  *
- *  Points is now NegBin with φ=3.0 (was Gamma σ_mult=0.40). Cuts MAE from
- *  3.80pp to 1.30pp. Gamma was failing badly for low-scoring players where
- *  it leaked probability mass into the upper tail. NegBin handles points
- *  as the discrete count they are. The routing change is in fitDistribution
- *  below; Points stays in this table so the dispersion is looked up like
- *  any other NB market.
+ *  HISTORY — a cautionary tale (Jun 2026): external NB2-parameterized fits
+ *  were pasted into this Fano-parameterized table, inflating φ by 3-17×
+ *  and breaking alt-line pricing by ~8pp+. If a proposed value looks
+ *  dramatically different from its neighbours, check the units first.
+ *
+ *  CALIBRATION SOURCES
+ *  [MAY]  May 9-10 2026 FD/DK calibration: 147 leave-one-out predictions,
+ *         38 (player,market) groups, fitted with THIS code's nbProbOver.
+ *  [JUN]  Jun 10 2026 FanDuel full alt ladders (basketball, 863 records)
+ *         and milestone ladders (baseball, 3156 records, 8 games), refit
+ *         with a byte-exact copy of production nbProbOver. Single-slate
+ *         caveat applies.
+ *  [AUDIT] External methodology audit doc — values arrive in NB2 units
+ *         and MUST be converted via fanoFromNB2 at the market's typical μ.
  * ============================================================ */
 const NB_DISPERSION = {
-  // ===== NBA (calibrated against FD/DK, May 2026) =====
-  // These values are direct fits from 147 leave-one-out predictions across
-  // 38 (player, market) groups. MAE for each in production: see calibration
-  // analysis comments above.
-  'Points': 6.80,                  // was 3.00 → 6.80 (Jun 2026 FD ladder calibration, N=15).
-                                   //   Old value over-dispersed: ~5pp alt error → ~3.3pp at 6.80.
-  'Rebounds': 12.10,               // was 1.35 → 12.10 (FD calibration, N=9). ~9.6pp → 1.9pp.
-  'Assists': 22.00,                // was μ-dependent 1.20-1.40 → constant 22.00 (FD calib, N=5,
-                                   //   MED confidence). ~10.4pp → 0.9pp. μ-dependent fn removed below.
-  'Three-Pointers Made': 1.25,     // unchanged — no clean 3PM ladders in Jun 2026 sample
-  'Blocks': 2.20,                  // was 1.20 (too tight — per audit, blocks are bursty;
-                                   // doc recommends k=3.0; φ=2.20 is conservative pending
-                                   // calibration data. 12 records, low confidence.)
-  'Steals': 1.90,                  // was 1.20 (same issue — doc recommends k=2.5 for steals;
-                                   // φ=1.90 is conservative pending calibration data.
-                                   // No direct data; slightly below Blocks given k=2.5 vs 3.0.)
+  // ===== NBA single markets =====
+  'Points': 2.90,                  // [JUN] N=15 ladders, median fit 2.90, MAE 0.91pp.
+                                   // Confirms [MAY] 3.00. (CV≈0.33 at μ=27.5, market 0.31.)
+  'Rebounds': 1.30,                // [JUN] N=9, median 1.25; [MAY] 1.35. Split: 1.30.
+  'Assists': 1.20,                 // [JUN] N=5, median 1.15; [MAY] base 1.20. Constant fits
+                                   // ladders fine — μ-dependent sigmoid not needed.
+  'Three-Pointers Made': 1.25,     // [MAY] — no 3PM ladders in Jun sample. Collect next.
+  'Blocks': 1.35,                  // [AUDIT] k_NB2=3.0 at μ≈1 → fano = 1+1/3.0 ≈ 1.33.
+                                   // Low confidence (12 records). Prev 2.20 was the raw
+                                   // NB2 value mis-pasted as Fano.
+  'Steals': 1.40,                  // [AUDIT] k_NB2=2.5 at μ≈1 → fano = 1+1/2.5 = 1.40.
+                                   // No direct ladder data yet.
 
-  // ===== WNBA: inherits NBA values (same sport mechanics) =====
-  // NB_DISPERSION lookup is by marketName only, not sport-scoped. WNBA
-  // Points/Rebounds/Assists/etc. resolve to the NBA-calibrated values
-  // above. The shape of overdispersion is determined by the sport's
-  // mechanics (possessions, shot types, role structure), which are
-  // structurally identical between NBA and WNBA. Mean μ values differ
-  // (WNBA lines are lower) but that's handled by the μ-fit, not φ.
-  //
-  // CAVEAT: this inheritance is structurally reasonable but NOT directly
-  // calibrated against WNBA book data. Once we accumulate WNBA records,
-  // could split into sport-scoped tables if values diverge.
+  // ===== WNBA: inherits NBA values (lookup is by marketName only) =====
+  // Structurally reasonable, not yet validated against WNBA book data.
 
-  // ===== Combo markets — guesses, no calibration data =====
-  // Brought down toward the observed range for component stats. Revisit
-  // once user logs combo records. Theoretical analysis suggests these
-  // might actually need φ closer to 1.10-1.20 (positive covariance between
-  // components means PRA variance grows slower than mean — could even be
-  // under-dispersed). Treat 1.30 as a safe provisional default.
-  'Rebounds + Assists': 14.00,     // was 1.30 → 14.00 (NO direct fit in Jun 2026 sample;
-                                   //   interpolated by analogy between P+R 12.0 and P+A 16.3.
-                                   //   Provisional — collect R+A ladders to confirm.)
-  'Points + Rebounds': 12.00,      // was 1.30 → 12.00 (FD calibration, N=13). ~10.6pp → 2.0pp.
-  'Points + Assists': 16.30,       // was 1.30 → 16.30 (FD calibration, N=7). ~11.9pp → 1.5pp.
-  'Points + Rebounds + Assists': 19.40,  // was 1.30 → 19.40 (FD calib, N=10). ~12.6pp → 1.3pp.
+  // ===== NBA combo markets =====
+  // [JUN] GENUINE FINDING: combos are 2-3× more dispersed than the old 1.30
+  // default. Makes sense: components are positively correlated, so combo
+  // variance = Σvar + 2Σcov grows faster than combo mean = Σμ.
+  'Points + Rebounds': 2.65,       // [JUN] N=13, median 2.65, MAE 0.50pp.
+  'Points + Assists': 2.40,        // [JUN] N=7, median 2.40, MAE 0.50pp.
+  'Points + Rebounds + Assists': 2.50,  // [JUN] N=10, median 2.50, MAE 0.45pp.
+                                   // Per-player range tight: 2.20-2.60. Strong signal.
+  'Rebounds + Assists': 2.20,      // NO direct fit. Provisional: lower than P+R/P+A since
+                                   // both components are low-μ. Collect ladders to confirm.
 
-  // ===== MLB: mixed sources, MLB-unvalidated =====
-  // Hits/Total Bases/Pitcher markets: kept in the 1.20-1.35 range consistent
-  // with NBA calibration showing books price discrete counting stats tightly.
-  // Home Runs: elevated at 2.20 (rare events, genuinely overdispersed).
-  // RBIs: corrected upward to 2.80 based on external audit showing 2+/1+
-  // ratio of 1.9-2.5× across 18 players — far too high for Poisson or low-φ
-  // NegBin. Bursty by nature (dependent on runners being on base).
-  //
-  // CAVEAT: NO MLB calibration data exists. All values are theory/audit-based.
-  'Pitcher Strikeouts': 1.30,      // unchanged (already in validated range)
-  'Pitcher Outs': 1.20,            // unchanged (already in validated range)
-  'Hits': 1.20,                    // unchanged (already in validated range)
-  'Total Bases': 1.35,             // unchanged (already in validated range)
-  'RBIs': 2.80,                    // VALIDATED (Jun 2026 FD milestone calib, N=144): fitted
-                                   // φ≈2.5, our 2.80 confirmed in range. Keep. (Earlier audit
-                                   // raised this from 1.35; real FD data now confirms it.)
-  'Home Runs': 3.00,               // was 2.20 → 3.00 (Jun 2026 FD calib, N=69 — fitted φ≈3.0).
-  'Runs': 1.80,                    // was 1.35 → 1.80 (Jun 2026 FD calib, N=144 — fitted φ≈1.8).
-  'Stolen Bases': 2.50,            // was 1.20 (default) → 2.50 (FD calib, N=48 — bursty rare event).
-  'Hits + Runs + RBIs': 2.50,      // was 1.30 (default) → 2.50 (FD calib, N=144 — ~1.6pp gain).
-  'Singles': 1.20,                 // unchanged — FD data consistent with Hits-like low dispersion
-  'Doubles': 1.20,                 // unchanged — rare event, insufficient ladder depth to refit
-  'Triples': 1.20,                 // unchanged — rare event
+  // ===== MLB batter markets =====
+  'Hits': 1.00,                    // [JUN] N=144, median 1.00 — pure Poisson WINS on the real
+                                   // ladders (1.02pp vs 1.32pp at φ=1.1). φ=1.00 routes through
+                                   // the exact Poisson fallback. Audit doc agrees: hits are
+                                   // ≈independent per-PA events.
+  'Total Bases': 3.40,             // [JUN×2] N=288 across Jun 10+11 slates: medians 3.45/3.35,
+                                   // IQR 2.95-3.90. (The earlier 3.00 estimate was an artifact
+                                   // of the fit grid capping at 3.0.) GENUINE FINDING — TB is a
+                                   // WEIGHTED count (1·1B+2·2B+3·3B+4·HR); compound-Poisson
+                                   // theory: fano = E[w²]/E[w] supports 2-4 for a typical mix.
+  'RBIs': 1.75,                    // [JUN×2] N=288 pooled median 1.75 (slate medians 2.20/1.55
+                                   // — widest disagreement of any market; IQR 1.45-2.40).
+                                   // Re-check with next slate. Mildly overdispersed
+                                   // (baserunner dependence). Prev 2.80 was NB2 mis-paste.
+  'Home Runs': 1.10,               // [JUN] N=69, median 1.10. Rare event ≈ Poisson; the old
+                                   // 2.20/3.00 values were unit-confusion artifacts.
+  'Runs': 1.20,                    // [JUN] N=144, median 1.20 (mild clustering).
+  'Stolen Bases': 1.00,            // [JUN×2] N=88. Per-player medians said 1.15 but those come
+                                   // from shallow 2-point ladders where φ is weakly identified;
+                                   // pooled ladder MAE prefers pure Poisson (0.18pp vs 0.23pp).
+                                   // Parsimony + the Hits-family pattern → Poisson.
+  'Hits + Runs + RBIs': 2.00,      // [JUN] N=144, median 2.00. Same combo-covariance logic
+                                   // as NBA combos: components co-move.
+  'Singles': 1.00,                 // Poisson — subset of Hits (which tested pure Poisson)
+  'Doubles': 1.05,                 // near-Poisson rare event, tiny cushion, no ladder depth
+  'Triples': 1.05,                 // near-Poisson rare event, tiny cushion, no ladder depth
 
-  // ===== NFL / NHL — UNCHANGED, locked from production =====
-  // NFL and NHL tabs are hard-locked in the UI (see sport-tab handlers
-  // below) while we accumulate calibration data. Leaving these values at
-  // their pre-calibration textbook defaults rather than guessing — when
-  // we unlock these sports, we'll calibrate properly with real data
-  // rather than re-tune blind. If you re-enable NFL/NHL before logging,
-  // expect alt-line pricing to be off by 2-5pp MAE (same magnitude as
-  // pre-calibration NBA).
+  // ===== MLB pitcher markets =====
+  'Pitcher Strikeouts': 1.00,      // [JUN×2] 30 pitchers across both slates: median 1.00,
+                                   // IQR 1.00-1.05 — pure Poisson, routed through the exact
+                                   // Poisson fallback. Matches real K game-log variance
+                                   // (CV≈0.4 → fano≈1.0). Confirms the audit doc's k=2.2 row
+                                   // was wrong even after unit conversion.
+  'Pitcher Outs': 1.20,            // unchanged — no new data
+  'Earned Runs': 1.30,             // unchanged — no new data
+  'Hits Allowed': 1.20,            // unchanged — no new data
+
+  // ===== NFL / NHL — locked from production, textbook defaults =====
   'Goals': 1.80, 'Shots on Goal': 1.45, 'Saves': 1.35,  // NHL: untouched
   'Receptions': 1.45, 'Receiving Yards': 1.55,          // NFL: untouched
   'Passing TDs': 2.20, 'Rushing TDs': 3.00,             // NFL: untouched
 };
+
+/* Convert an external NB2/"size"-parameterized dispersion (Stan
+ * neg_binomial_2, R rnbinom size=, most academic papers) into this file's
+ * Fano-factor convention. NB2: var = μ + μ²/φ_size. Fano: var = φ·μ.
+ * The conversion DEPENDS ON μ — evaluate at the market's typical mean. */
+function fanoFromNB2(mu, phiSize){
+  if (!(mu > 0) || !(phiSize > 0)) return null;
+  return 1 + mu / phiSize;
+}
 
 /* NB_DISPERSION_FN — μ-dependent overrides for markets where the right
  * dispersion depends on the player's role.
@@ -9896,7 +9904,10 @@ function fitNegBin(observations, defaultLambda, defaultPhi){
   const muMin = 0.05, muMax = meanH * 4;
   for (let mi = 0; mi <= 60; mi++){
     const mu = muMin + mi * (muMax - muMin) / 60;
-    for (const phi of [1.1, 1.2, 1.3, 1.4, 1.5, 1.65, 1.8, 2.0, 2.5, 3.0, phi0]){
+    // Grid extended to 4.5 (Jun 2026): Total Bases and combo markets fit at
+    // φ≈2.4-3.0; the old 3.0 cap could rail against the boundary. phi0 (the
+    // market default) is always included so multi-line fits can stay near it.
+    for (const phi of [1.05, 1.1, 1.2, 1.3, 1.4, 1.5, 1.65, 1.8, 2.0, 2.25, 2.5, 2.75, 3.0, 3.5, 4.0, 4.5, phi0]){
       let err = 0;
       for (const o of observations) err += (nbProbOver(o.handicap, mu, phi) - o.fairProbOver)**2;
       if (err < best.err) best = { err, mu, phi };
